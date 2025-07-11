@@ -4,6 +4,7 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
+    "start": "node dist/server.js",
     "dev":"ts-node --transpile-only -r tsconfig-paths/register server.ts"
   },
   "dependencies": {
