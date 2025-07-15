@@ -1,4 +1,3 @@
-// Importing required dependencies
 import { Server } from "socket.io";
 import http from "http";
 import dotenv from "dotenv";
@@ -7,17 +6,12 @@ import UserModel from "./src/models/user.model";
 import MessageModel from "./src/models/message.model";
 import GroupModel from "./src/models/group.model";
 import GroupMessageModel from "./src/models/groupMessage.model";
+import GroupPostModel from "./src/models/groupPost.model";
 
-// Load environment variables from .env file
 dotenv.config();
 
-// Define the port for the Socket.IO server, defaulting to 4000 if not specified
 const PORT = process.env.SOCKET_PORT || 4000;
-
-// Create an HTTP server to attach Socket.IO
 const server = http.createServer();
-
-// Initialize Socket.IO server with CORS configuration
 const allowedOrigins = process.env.NEXT_PUBLIC_APP_URL
   ? process.env.NEXT_PUBLIC_APP_URL.split(",")
   : ["http://localhost:3000", "https://unichat-cc.vercel.app"];
@@ -30,17 +24,11 @@ const io = new Server(server, {
   },
 });
 
-// Middleware: Authenticate incoming socket connections
 io.use(async (socket, next) => {
   try {
     const userId = socket.handshake.auth.userId;
-    console.log("Received userId:", userId);
-
-    if (!userId) {
-      throw new Error("User ID required");
-    }
-    if (typeof userId !== "string") {
-      throw new Error("User ID must be a string");
+    if (!userId || typeof userId !== "string") {
+      throw new Error("User ID required and must be a string");
     }
 
     const user = await UserModel.findById(userId);
@@ -58,7 +46,6 @@ io.use(async (socket, next) => {
   }
 });
 
-// Handle Socket.IO connection events
 io.on("connection", async (socket) => {
   console.log(`User connected: ${socket.userId}`);
 
@@ -87,8 +74,7 @@ io.on("connection", async (socket) => {
 
       if (!sender.connections.includes(recipient._id)) {
         socket.emit("error", {
-          message:
-            "Recipient is not in your friend list. Please send a friend request first.",
+          message: "Recipient is not in your friend list.",
           action: "sendFriendRequest",
           recipientId,
         });
@@ -110,9 +96,7 @@ io.on("connection", async (socket) => {
         createdAt: message.createdAt,
       });
     } catch (error: any) {
-      socket.emit("error", {
-        message: error.message || "Failed to send message",
-      });
+      socket.emit("error", { message: error.message || "Failed to send message" });
     }
   });
 
@@ -149,9 +133,54 @@ io.on("connection", async (socket) => {
         createdAt: message.createdAt.toISOString(),
       });
     } catch (error: any) {
-      socket.emit("error", {
-        message: error.message || "Failed to send group message",
+      socket.emit("error", { message: error.message || "Failed to send group message" });
+    }
+  });
+
+  socket.on("sendGroupPost", async ({ groupId, content, image }) => {
+    try {
+      const sender = await UserModel.findById(socket.userId);
+      const group = await GroupModel.findById(groupId);
+
+      if (!sender || !group) {
+        socket.emit("error", { message: "User or group not found" });
+        return;
+      }
+
+      if (!group.members.includes(sender._id)) {
+        socket.emit("error", { message: "You are not a member of this group" });
+        return;
+      }
+
+      const post = new GroupPostModel({
+        groupId,
+        creator: socket.userId,
+        content,
+        image: image || null,
       });
+      await post.save();
+
+      const populatedPost = await GroupPostModel.findById(post._id)
+        .populate<{ creator: { userName: string; profilePicture?: string } }>(
+          "creator",
+          "userName profilePicture"
+        )
+        .lean();
+
+      io.to(groupId).emit("groupPost", {
+        _id: post._id.toString(),
+        groupId: groupId,
+        creator: {
+          _id: socket.userId,
+          userName: populatedPost?.creator.userName,
+          profilePicture: populatedPost?.creator.profilePicture,
+        },
+        content,
+        image: post.image,
+        createdAt: post.createdAt.toISOString(),
+      });
+    } catch (error: any) {
+      socket.emit("error", { message: error.message || "Failed to send group post" });
     }
   });
 
@@ -160,7 +189,6 @@ io.on("connection", async (socket) => {
   });
 });
 
-// Connect to MongoDB and start the server
 connectDB().then(() => {
   server.listen(PORT, () => {
     console.log(`Socket.IO server running on port ${PORT}`);
